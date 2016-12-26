@@ -1,6 +1,6 @@
 //
 //  BCCSQL.swift
-//  
+//
 //
 //  Created by Laurence Andersen on 12/20/16.
 //
@@ -14,12 +14,15 @@
 
 import Dispatch
 
+let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
 
 enum SQLiteError: Error {
     case Open(errorString: String)
     case Close(errorString: String)
     case Exec(errorString: String)
     case Prepare(errorString: String)
+    case Bind
     case Step
     case DatabaseNotOpen
     case Unknown
@@ -54,7 +57,7 @@ class DatabaseContext {
     init (databasePath dbPath: String) {
         databasePath = dbPath
         databaseConnection = nil
-    
+        
         queue = DispatchQueue(label: "nyc.bcc.SQLContext.WorkerQueue")
         queue.setTarget(queue: DispatchQueue.global())
     }
@@ -113,7 +116,7 @@ class DatabaseConnection {
             database = nil
             return
         }
-
+        
         if let errorString = errorString(forCode: err) {
             throw SQLiteError.Close(errorString: errorString)
         } else {
@@ -149,7 +152,7 @@ class DatabaseConnection {
         if err == SQLITE_OK {
             return Statement(withSQLString: sqlString, statement: statement!)
         }
-
+        
         if let errorString = errorString(forCode: err) {
             throw SQLiteError.Prepare(errorString: errorString)
         } else {
@@ -196,6 +199,38 @@ class DatabaseConnection {
             default:
                 return .Unknown
             }
+        }
+        
+        func bind(item:AnyObject, atIndex index: Int32) throws {
+            let sqlType = columnType(forIndex: index)
+            
+            switch sqlType {
+            case .Integer:
+                if let integerItem = item as? Int64 {
+                    sqlite3_bind_int64(statement, index, integerItem)
+                } else {
+                    throw SQLiteError.Bind
+                }
+            case .Float:
+                if let floatItem = item as? Double {
+                    sqlite3_bind_double(statement, index, floatItem)
+                }
+            case .Text:
+                if let stringItem = item as? String {
+                    sqlite3_bind_text(statement, index, stringItem, -1, SQLITE_TRANSIENT)
+                } else {
+                    throw SQLiteError.Bind
+                }
+            case .Blob:
+                if let blobItem = item as? Array<UInt8> {
+                    sqlite3_bind_blob(statement, index, blobItem, Int32(blobItem.count), SQLITE_TRANSIENT)
+                } else {
+                    throw SQLiteError.Bind
+                }
+            default:
+                throw SQLiteError.Bind
+            }
+            
         }
         
         func step () throws {
