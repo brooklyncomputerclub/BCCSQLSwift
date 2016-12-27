@@ -28,24 +28,90 @@ enum SQLiteError: Error {
     case Unknown
 }
 
-enum SQLiteType {
-    case Integer
-    case Float
-    case Text
-    case Blob
-    case Null
+enum SQLiteType: String {
+    case Integer = "INTEGER"
+    case Float = "FLOAT"
+    case Text = "TEXT"
+    case Blob = "BLOB"
+    case Null = "NULL"
     case Unknown
 }
 
 
 struct Entity {
     let name: String
+    let tableName: String
+    var primaryKeyPropertyKey: String? = nil
+    private let properties: Array<Property> = Array<Property>()
     
-    init (name: String) {
+    var createSQL: String? {
+        get {
+            var sqlString = "CREATE TABLE IF NOT EXISTS \(tableName)"
+            guard properties.count > 0 else {
+                return sqlString
+            }
+            
+            sqlString.append(" (")
+            
+            for index in 0...properties.count {
+                let currentProperty = properties[index]
+                
+                guard let columnSQL = currentProperty.createSQL else {
+                    continue
+                }
+                
+                sqlString.append(columnSQL)
+                
+                if currentProperty.key == self.primaryKeyPropertyKey {
+                    sqlString.append(" PRIMARY KEY")
+                }
+            }
+            
+            return sqlString
+        }
+    }
+    
+    init (name: String, tableName: String) {
         self.name = name
+        self.tableName = tableName
     }
 }
 
+struct Property {
+    let key: String
+    let columnName: String
+    let sqlType: SQLiteType
+    var nonNull: Bool = false
+    var unique: Bool = false
+    
+    var createSQL: String? {
+        get {
+            var sqlString = columnName
+            
+            guard sqlType != .Unknown else {
+                return nil
+            }
+            
+            sqlString.append(" \(sqlType.rawValue)")
+            
+            if nonNull == true {
+                sqlString.append(" NOT NULL")
+            }
+            
+            if unique == true {
+                sqlString.append(" UNIQUE")
+            }
+            
+            return sqlString
+        }
+    }
+    
+    init (withKey key: String, columnName: String, type: SQLiteType) {
+        self.key = key
+        self.columnName = columnName
+        self.sqlType = type
+    }
+}
 
 class DatabaseContext {
     let databasePath: String?
@@ -75,6 +141,25 @@ class DatabaseContext {
             print("Unknown error")
         }
         
+        createEntityTables()
+    }
+    
+    func createEntityTables () {
+        guard let dbConnection = databaseConnection else {
+            return
+        }
+        
+        for currentEntity in entities {
+            do {
+                guard let createSQL = currentEntity.createSQL else {
+                    return
+                }
+                
+                try dbConnection.exec(withSQLString: createSQL)
+            } catch {
+                print("Error creating entity tables:")
+            }
+        }
     }
 }
 
