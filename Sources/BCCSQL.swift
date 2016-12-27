@@ -38,11 +38,12 @@ enum SQLiteType: String {
 }
 
 
-struct Entity {
+class Entity {
     let name: String
     let tableName: String
+    
+    private var properties = [String: Property]()
     var primaryKeyPropertyKey: String? = nil
-    private let properties: Array<Property> = Array<Property>()
     
     var createSQL: String? {
         get {
@@ -53,8 +54,8 @@ struct Entity {
             
             sqlString.append(" (")
             
-            for index in 0...properties.count {
-                let currentProperty = properties[index]
+            for (index, currentItem) in properties.enumerated() {
+                let currentProperty = currentItem.value
                 
                 guard let columnSQL = currentProperty.createSQL else {
                     continue
@@ -65,15 +66,50 @@ struct Entity {
                 if currentProperty.key == self.primaryKeyPropertyKey {
                     sqlString.append(" PRIMARY KEY")
                 }
+                
+                if index < (properties.count - 1) {
+                    sqlString.append(", ")
+                }
             }
             
+            sqlString.append(")")
+            
             return sqlString
+        }
+    }
+    
+    var primaryKeyProperty: Property? {
+        guard let primaryKey = self.primaryKeyPropertyKey else {
+            return nil
+        }
+        
+        return self[primaryKey]
+    }
+    
+    subscript(key: String) -> Property? {
+        get {
+            return propertyForKey(key)
         }
     }
     
     init (name: String, tableName: String) {
         self.name = name
         self.tableName = tableName
+        
+    }
+    
+    func addProperty(_ property: Property) {
+        properties[property.key] = property
+    }
+    
+    func propertyForKey(_ key: String) -> Property? {
+        return properties[key]
+    }
+    
+    func propertyForColumnName(_ columnName: String) -> Property? {
+        return properties.filter ({ (columnName, currentProperty) -> Bool in
+            return (currentProperty.columnName == columnName)
+        }).first?.value
     }
 }
 
@@ -117,8 +153,9 @@ class DatabaseContext {
     let databasePath: String?
     
     private var databaseConnection: DatabaseConnection?
-    private let entities: Array<Entity> = Array()
     private let queue: DispatchQueue
+    
+    private var entities = [String: Entity]()
     
     init (databasePath dbPath: String) {
         databasePath = dbPath
@@ -149,7 +186,7 @@ class DatabaseContext {
             return
         }
         
-        for currentEntity in entities {
+        for (_, currentEntity) in entities {
             do {
                 guard let createSQL = currentEntity.createSQL else {
                     return
@@ -160,6 +197,14 @@ class DatabaseContext {
                 print("Error creating entity tables:")
             }
         }
+    }
+    
+    func addEntity(_ entity: Entity) {
+        entities[entity.name] = entity
+    }
+    
+    func entityForName(_ name: String) -> Entity? {
+        return entities[name]
     }
 }
 
