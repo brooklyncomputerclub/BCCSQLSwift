@@ -45,7 +45,7 @@ class Entity {
     private var properties = [String: Property]()
     var primaryKeyPropertyKey: String? = nil
     
-    var createSQL: String? {
+    var schemaSQL: String? {
         get {
             var sqlString = "CREATE TABLE IF NOT EXISTS \(tableName)"
             guard properties.count > 0 else {
@@ -57,7 +57,7 @@ class Entity {
             for (index, currentItem) in properties.enumerated() {
                 let currentProperty = currentItem.value
                 
-                guard let columnSQL = currentProperty.createSQL else {
+                guard let columnSQL = currentProperty.schemaSQL else {
                     continue
                 }
                 
@@ -78,12 +78,62 @@ class Entity {
         }
     }
     
+    var selectSQL: String? {
+        return "SELECT \(columnsListString) FROM \(tableName)"
+    }
+    
+    var findByPrimaryKeySQL: String? {
+        guard let pkp = primaryKeyProperty else {
+            return nil
+        }
+        
+        return "SELECT \(columnsListString) FROM \(tableName) WHERE = \(pkp.columnName)"
+    }
+    
+    var findByRowIDSQL: String? {
+        return "SELECT \(columnsListString) FROM \(tableName) WHERE rowid = ?"
+    }
+    
+    var deleteSQL: String? {
+        return "DELETE FROM \(tableName)"
+    }
+    
+    var deleteByPrimaryKeySQL: String? {
+        get {
+            guard let pkp = primaryKeyProperty else {
+                return nil
+            }
+            
+            return "DELETE FROM \(tableName) WHERE \(pkp.columnName) = ?"
+        }
+    }
+    
     var primaryKeyProperty: Property? {
         guard let primaryKey = self.primaryKeyPropertyKey else {
             return nil
         }
         
         return self[primaryKey]
+    }
+    
+    var columnsListString: String {
+        guard properties.count > 0 else {
+            return "*"
+        }
+        
+        var columnsString = String()
+        
+        for (index, currentItem) in properties.enumerated() {
+            let currentProperty = currentItem.value
+            
+            columnsString.append(currentProperty.columnName)
+            
+            if index > 0 {
+                columnsString.append(", ")
+            }
+        }
+        
+        return columnsString
     }
     
     subscript(key: String) -> Property? {
@@ -95,11 +145,14 @@ class Entity {
     init (name: String, tableName: String) {
         self.name = name
         self.tableName = tableName
-        
     }
     
-    func addProperty(_ property: Property) {
+    func addProperty(_ property: Property, isPrimaryKey: Bool) {
         properties[property.key] = property
+        
+        if isPrimaryKey {
+            self.primaryKeyPropertyKey = property.key
+        }
     }
     
     func propertyForKey(_ key: String) -> Property? {
@@ -113,6 +166,7 @@ class Entity {
     }
 }
 
+
 struct Property {
     let key: String
     let columnName: String
@@ -120,7 +174,7 @@ struct Property {
     var nonNull: Bool = false
     var unique: Bool = false
     
-    var createSQL: String? {
+    var schemaSQL: String? {
         get {
             var sqlString = columnName
             
@@ -148,6 +202,7 @@ struct Property {
         self.sqlType = type
     }
 }
+
 
 class DatabaseContext {
     let databasePath: String?
@@ -188,7 +243,7 @@ class DatabaseContext {
         
         for (_, currentEntity) in entities {
             do {
-                guard let createSQL = currentEntity.createSQL else {
+                guard let createSQL = currentEntity.schemaSQL else {
                     return
                 }
                 
@@ -377,6 +432,7 @@ class DatabaseConnection {
         }
     }
 }
+
 
 func errorString(forCode err: Int32) -> String? {
     if let errString: UnsafePointer<CChar> = sqlite3_errstr(err) {
