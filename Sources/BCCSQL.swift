@@ -147,7 +147,7 @@ class Entity {
         self.tableName = tableName
     }
     
-    func addProperty(_ property: Property, isPrimaryKey: Bool) {
+    func addProperty(_ property: Property, isPrimaryKey: Bool = false) {
         properties[property.key] = property
         
         if isPrimaryKey {
@@ -163,6 +163,53 @@ class Entity {
         return properties.filter ({ (columnName, currentProperty) -> Bool in
             return (currentProperty.columnName == columnName)
         }).first?.value
+    }
+    
+    func insertSQLForPropertyKeys(_ keys: Array<String>) -> String? {
+        guard properties.count > 0 else {
+            return nil
+        }
+        
+        var columnsString = String()
+        var valuesString = String()
+        
+        for (index, currentKey) in keys.enumerated() {
+            guard let currentProperty = self[currentKey] else {
+                continue
+            }
+            
+            columnsString.append(currentProperty.columnName)
+            valuesString.append("?")
+            
+            if (index > 0) {
+                columnsString.append(", ")
+                valuesString.append(", ")
+            }
+        }
+        
+        return "INSERT INTO \(tableName) (\(columnsString)) VALUES (\(valuesString))"
+    }
+    
+    func updateSQLForPropertyKeys(_ keys: Array<String>, primaryKeyValue: AnyObject) -> String? {
+        guard properties.count > 0, let primaryKeyColumn = primaryKeyProperty?.columnName else {
+            return nil
+        }
+        
+        var assignmentsString = String()
+        
+        for (index, currentKey) in keys.enumerated() {
+            guard let columnName = self[currentKey]?.columnName else {
+                continue
+            }
+            
+            assignmentsString.append("\(columnName) = ?")
+            
+            if index > 0 {
+                assignmentsString.append(", ")
+            }
+        }
+        
+        return "UPDATE \(tableName) SET \(assignmentsString) WHERE \(primaryKeyColumn) = ?"
     }
 }
 
@@ -441,4 +488,3 @@ func errorString(forCode err: Int32) -> String? {
     
     return nil
 }
-
