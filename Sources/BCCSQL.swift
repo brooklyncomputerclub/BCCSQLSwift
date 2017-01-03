@@ -16,6 +16,10 @@ import Dispatch
 
 let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+typealias SQLiteRawType = Int32
+typealias KeyValuePair = (key: String, value: AnyObject?)
+typealias ModelInstanceCreator = (() -> ModelObject)
+
 
 enum SQLiteError: Error {
     case Open(errorString: String)
@@ -38,12 +42,113 @@ enum SQLiteType: String {
 }
 
 
+protocol ModelObject {
+    static var entity: Entity { get }
+}
+
+struct TestModelObject: ModelObject {
+    static var entity: Entity {
+        get {
+            let entity = Entity(name: "TestObject", tableName: "test_object") { () -> ModelObject in
+                return TestModelObject()
+            }
+            
+            entity.addProperty(Property(withKey: "identifier", columnName: "id", type: .Integer), isPrimaryKey: true)
+            entity.addProperty(Property(withKey: "name", columnName: "name", type: .Text))
+            entity.addProperty(Property(withKey: "city", columnName: "city", type: .Text))
+            
+            return entity
+        }
+    }
+}
+
+
+class DatabaseContext {
+    let databasePath: String?
+    
+    private var databaseConnection: DatabaseConnection?
+    private let queue: DispatchQueue
+    
+    private var entities = [String: Entity]()
+    
+    init (databasePath dbPath: String) {
+        databasePath = dbPath
+        databaseConnection = nil
+        
+        queue = DispatchQueue(label: "nyc.bcc.SQLContext.WorkerQueue")
+        queue.setTarget(queue: DispatchQueue.global())
+    }
+    
+    func initializeDatabase () {
+        guard let dbPath = databasePath else {
+            return
+        }
+        
+        do {
+            try databaseConnection = DatabaseConnection(forPath: dbPath)
+        } catch SQLiteError.Open(let errorString) {
+            print("Error opening database: \(errorString)")
+        } catch {
+            print("Unknown error")
+        }
+        
+        createEntityTables()
+    }
+    
+    func createEntityTables () {
+        guard let dbConnection = databaseConnection else {
+            return
+        }
+        
+        for (_, currentEntity) in entities {
+            do {
+                guard let createSQL = currentEntity.schemaSQL else {
+                    return
+                }
+                
+                try dbConnection.exec(withSQLString: createSQL)
+            } catch {
+                print("Error creating entity tables:")
+            }
+        }
+    }
+    
+    func addEntity(_ entity: Entity) {
+        entities[entity.name] = entity
+    }
+    
+    func entityForName(_ name: String) -> Entity? {
+        return entities[name]
+    }
+    
+    func createModelObjectOfType<U>(_ type: U.Type, withKeysAndValues keyValueList: KeyValuePair...) where U: ModelObject {
+        let keyList = keyValueList.map { (key, value) in
+            return key
+        }
+        
+        let valueList = keyValueList.map { key, value in
+            return value
+        }
+        
+        let entity = U.entity
+        
+        guard let modelObject = entity.createModelObjectInstance() else {
+            return
+        }
+        
+        
+    }
+}
+
+
 class Entity {
     let name: String
     let tableName: String
     
     private var properties = [String: Property]()
     var primaryKeyPropertyKey: String? = nil
+    
+    let modelInstanceCreator: ModelInstanceCreator?
     
     var schemaSQL: String? {
         get {
@@ -142,9 +247,18 @@ class Entity {
         }
     }
     
-    init (name: String, tableName: String) {
+    init (name: String, tableName: String, modelInstanceCreator: @escaping ModelInstanceCreator) {
         self.name = name
         self.tableName = tableName
+        self.modelInstanceCreator = modelInstanceCreator
+    }
+    
+    func createModelObjectInstance() -> ModelObject? {
+        guard let mic = modelInstanceCreator else {
+            return nil
+        }
+        
+        return mic()
     }
     
     func addProperty(_ property: Property, isPrimaryKey: Bool = false) {
@@ -247,66 +361,6 @@ struct Property {
         self.key = key
         self.columnName = columnName
         self.sqlType = type
-    }
-}
-
-
-class DatabaseContext {
-    let databasePath: String?
-    
-    private var databaseConnection: DatabaseConnection?
-    private let queue: DispatchQueue
-    
-    private var entities = [String: Entity]()
-    
-    init (databasePath dbPath: String) {
-        databasePath = dbPath
-        databaseConnection = nil
-        
-        queue = DispatchQueue(label: "nyc.bcc.SQLContext.WorkerQueue")
-        queue.setTarget(queue: DispatchQueue.global())
-    }
-    
-    func initializeDatabase () {
-        guard let dbPath = databasePath else {
-            return
-        }
-        
-        do {
-            try databaseConnection = DatabaseConnection(forPath: dbPath)
-        } catch SQLiteError.Open(let errorString) {
-            print("Error opening database: \(errorString)")
-        } catch {
-            print("Unknown error")
-        }
-        
-        createEntityTables()
-    }
-    
-    func createEntityTables () {
-        guard let dbConnection = databaseConnection else {
-            return
-        }
-        
-        for (_, currentEntity) in entities {
-            do {
-                guard let createSQL = currentEntity.schemaSQL else {
-                    return
-                }
-                
-                try dbConnection.exec(withSQLString: createSQL)
-            } catch {
-                print("Error creating entity tables:")
-            }
-        }
-    }
-    
-    func addEntity(_ entity: Entity) {
-        entities[entity.name] = entity
-    }
-    
-    func entityForName(_ name: String) -> Entity? {
-        return entities[name]
     }
 }
 
@@ -415,22 +469,8 @@ class DatabaseConnection {
         }
         
         func columnType(forIndex index: Int32) -> SQLiteType {
-            let sqliteType = sqlite3_column_type(statement, index)
-            
-            switch sqliteType {
-            case SQLITE_INTEGER:
-                return .Integer
-            case SQLITE_FLOAT:
-                return .Float
-            case SQLITE_TEXT:
-                return .Text
-            case SQLITE_BLOB:
-                return .Blob
-            case SQLITE_NULL:
-                return .Null
-            default:
-                return .Unknown
-            }
+            let sqliteRawType = sqlite3_column_type(statement, index)
+            return columnTypeForSQLiteRawType(sqliteRawType)
         }
         
         func bind(item:AnyObject, atIndex index: Int32) throws {
@@ -480,6 +520,22 @@ class DatabaseConnection {
     }
 }
 
+func columnTypeForSQLiteRawType(_ sqliteType: SQLiteRawType) -> SQLiteType {
+    switch sqliteType {
+    case SQLITE_INTEGER:
+        return .Integer
+    case SQLITE_FLOAT:
+        return .Float
+    case SQLITE_TEXT:
+        return .Text
+    case SQLITE_BLOB:
+        return .Blob
+    case SQLITE_NULL:
+        return .Null
+    default:
+        return .Unknown
+    }
+}
 
 func errorString(forCode err: Int32) -> String? {
     if let errString: UnsafePointer<CChar> = sqlite3_errstr(err) {
@@ -488,3 +544,4 @@ func errorString(forCode err: Int32) -> String? {
     
     return nil
 }
+
