@@ -46,11 +46,6 @@ protocol ModelObject {
     static var entity: Entity<InstanceType> { get }
 }
 
-
-protocol Coercable {
-    associatedtype ValueType
-}
-
 class TestModelObject: ModelObject {
     var identifier: Int?
     var name: String?
