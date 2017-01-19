@@ -92,7 +92,7 @@ class DatabaseContext {
         databaseConnection = nil
         
         queue = DispatchQueue(label: "nyc.bcc.SQLContext.WorkerQueue")
-        queue.setTarget(queue: DispatchQueue.global())
+        //queue.setTarget(queue: DispatchQueue.global())
     }
     
     func initializeDatabase () {
@@ -137,7 +137,7 @@ class DatabaseContext {
         return entities[name]
     }
     
-    func createModelObject<U: ModelObject>(withKeysAndValues keyValueList: KeyValuePair...) throws -> U? {
+    func createModelObjectOfType<U: ModelObject>(_ type:U.Type, withKeysAndValues keyValueList: KeyValuePair...) throws -> U? {
         guard let db = databaseConnection else {
             return nil
         }
@@ -179,7 +179,6 @@ class DatabaseContext {
         
         // How to get property for column (preferably by index, which means entity needs to keep order)
         // How to coerce raw DB value to instance value
-        // How to set value on model object instance
         
         let columnCount = Int(statement.columnCount)
         
@@ -362,13 +361,13 @@ class Entity {
                 continue
             }
             
-            columnsString.append(currentProperty.columnName)
-            valuesString.append("?")
-            
             if (index > 0) {
                 columnsString.append(", ")
                 valuesString.append(", ")
             }
+            
+            columnsString.append(currentProperty.columnName)
+            valuesString.append("?")
         }
         
         return "INSERT INTO \(tableName) (\(columnsString)) VALUES (\(valuesString))"
@@ -585,55 +584,33 @@ class DatabaseConnection {
         }
         
         func bind(values: Array<Any?>) throws {
-            if values.count > Int(columnCount) {
-                throw SQLiteError.Bind
-            }
-            
             for (index, currentValue) in values.enumerated() {
-                try bind(item: currentValue, atIndex: Int32(index))
+                try bind(item: currentValue, atIndex: Int32(index) + 1)
             }
         }
         
         func bind(item:Any?, atIndex index: Int32) throws {
-            let sqlType = columnType(forIndex: index)
-            
             guard let value = item else {
                 sqlite3_bind_null(statement, index)
                 return
             }
             
-            switch sqlType {
-            case .Integer:
-                if let integerItem = value as? Int64 {
-                    sqlite3_bind_int64(statement, index, integerItem)
-                } else {
-                    throw SQLiteError.Bind
-                }
-            case .Float:
-                if let floatItem = value as? Double {
-                    sqlite3_bind_double(statement, index, floatItem)
-                }
-            case .Text:
-                if let stringItem = value as? String {
-                    sqlite3_bind_text(statement, index, stringItem, -1, SQLITE_TRANSIENT)
-                } else {
-                    throw SQLiteError.Bind
-                }
-            case .Blob:
-                if let blobItem = value as? Array<UInt8> {
-                    sqlite3_bind_blob(statement, index, blobItem, Int32(blobItem.count), SQLITE_TRANSIENT)
-                } else {
-                    throw SQLiteError.Bind
-                }
-            default:
+            if let integerItem = value as? Int64 {
+                sqlite3_bind_int64(statement, index, integerItem)
+            } else if let floatItem = value as? Double {
+                sqlite3_bind_double(statement, index, floatItem)
+            } else if let stringItem = value as? String {
+                sqlite3_bind_text(statement, index, stringItem, -1, SQLITE_TRANSIENT)
+            } else if let blobItem = value as? Array<UInt8> {
+                sqlite3_bind_blob(statement, index, blobItem, Int32(blobItem.count), SQLITE_TRANSIENT)
+            } else {
                 throw SQLiteError.Bind
             }
-            
         }
         
         func step () throws {
             let err = sqlite3_step(statement)
-            if err == SQLITE_ROW {
+            if err == SQLITE_ROW || err == SQLITE_DONE {
                 return
             }
             
@@ -670,3 +647,4 @@ func errorString(forCode err: Int32) -> String? {
     
     return nil
 }
+
