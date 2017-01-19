@@ -49,36 +49,6 @@ protocol ModelObject {
 }
 
 
-class TestModelObject: ModelObject {
-    var identifier: Int?
-    var name: String?
-    var city: String?
-    
-    static let entity: Entity = {
-        let entity = Entity(name: "TestObject", tableName: "test_object", modelInstanceCreator: TestModelObject.init)
-        
-        entity.addProperty(Property(withKey: "identifier", columnName: "id", type: .Integer))
-        entity.addProperty(Property(withKey: "name", columnName: "name", type: .Text))
-        entity.addProperty(Property(withKey: "city", columnName: "city", type: .Text))
-        
-        return entity
-    }()
-    
-    func setKey<T>(_ key: String, value: T) {
-        switch key {
-        case "identifier":
-            self.identifier = value as? Int
-        case "name":
-            self.name = value as? String
-        case "city":
-            self.city = value as? String
-        default:
-            return
-        }
-    }
-}
-
-
 class DatabaseContext {
     let databasePath: String?
     
@@ -138,6 +108,10 @@ class DatabaseContext {
     }
     
     func createModelObjectOfType<U: ModelObject>(_ type:U.Type, withKeysAndValues keyValueList: KeyValuePair...) throws -> U? {
+        return try createModelObjectOfType(type, withKeysAndValues: keyValueList)
+    }
+    
+    func createModelObjectOfType<U: ModelObject>(_ type:U.Type, withKeysAndValues keyValueList: [KeyValuePair]) throws -> U? {
         guard let db = databaseConnection else {
             return nil
         }
@@ -156,29 +130,155 @@ class DatabaseContext {
             return nil
         }
         
-        if let insertStatement = try db.prepareStatement(withSQLString: insertSQL) {
-            try insertStatement.bind(values: valueList)
-            try insertStatement.step()
-            try insertStatement.finalize()
+        guard let insertStatement = try db.prepareStatement(withSQLString: insertSQL) else {
+            return nil
         }
         
+        try insertStatement.bind(values: valueList)
+        try insertStatement.step()
+        
+        // TODO: Populate values in created object
         let modelObject = entity.create()
         
-        // Find object from database and return that
+        try insertStatement.finalize()
         
         return modelObject as? U
     }
     
-    func nextModelObject<U: ModelObject>(fromStatement statement: DatabaseConnection.Statement) throws -> U? {
-        try statement.step()
+    func createOrUpdateModelObjectOfType<U: ModelObject>(_ type:U.Type, primaryKeyValue: Any, withKeysAndValues keyValueList: KeyValuePair...) throws -> U? {
+        var modelObject: U? = nil
+        
+        if try modelObjectExistsForType(type, primaryKeyValue: primaryKeyValue) {
+            modelObject = try updateModelObjectOfType(type, primaryKeyValue: primaryKeyValue, withKeysAndValues: keyValueList)
+        } else {
+            modelObject = try createModelObjectOfType(type, withKeysAndValues: keyValueList)
+        }
+        
+        return modelObject
+    }
+    
+    func updateModelObjectOfType<U: ModelObject>(_ type:U.Type, primaryKeyValue: Any, withKeysAndValues keyValueList: KeyValuePair...) throws -> U? {
+        return try updateModelObjectOfType(type, primaryKeyValue: primaryKeyValue, withKeysAndValues: keyValueList)
+    }
+    
+    func updateModelObjectOfType<U: ModelObject>(_ type:U.Type, primaryKeyValue: Any, withKeysAndValues keyValueList: [KeyValuePair]) throws -> U? {
+        
+        guard let db = databaseConnection else {
+            return nil
+        }
+        
+        let keyList = keyValueList.map { (key, value) in
+            return key
+        }
+        
+        let valueList = keyValueList.map { key, value in
+            return value
+        }
+        
+        let entity = U.entity
+        
+        guard let updateSQL = entity.updateSQLForKeys(keyList) else {
+            return nil
+        }
+        
+        guard let updateStatement = try db.prepareStatement(withSQLString: updateSQL) else {
+            return nil
+        }
+        
+        try updateStatement.bind(values: valueList)
+        try updateStatement.bind(item: primaryKeyValue, atIndex: valueList.count + 2)
+        try updateStatement.step()
+        try updateStatement.finalize()
+        
+        // TODO: Populate values in created object
+        let modelObject = entity.create()
+        
+        return modelObject as? U
+    }
+    
+    func deleteModelObjectOfType<U: ModelObject>(_ type:U.Type, primaryKeyValue: Any) throws {
+        guard let db = databaseConnection else {
+            return
+        }
+        
+        let entity = U.entity
+        
+        guard let deleteSQL = entity.deleteByPrimaryKeySQL else {
+            return
+        }
+        
+        guard let deleteStatement = try db.prepareStatement(withSQLString: deleteSQL) else {
+            return
+        }
+        
+        try deleteStatement.bind(item: primaryKeyValue, atIndex: 1)
+        
+        try deleteStatement.step()
+    }
+    
+    func modelObjectExistsForType<U: ModelObject>(_ type:U.Type, primaryKeyValue: Any) throws -> Bool {
+        guard let db = databaseConnection else {
+            return false
+        }
+        
+        let entity = U.entity
+        
+        guard let findSQL = entity.findByPrimaryKeySQL else {
+            return false
+        }
+        
+        guard let findStatement = try db.prepareStatement(withSQLString: findSQL) else {
+            return false
+        }
+        
+        try findStatement.bind(item: primaryKeyValue, atIndex: 1)
+        
+        var found = false
+        
+        if try findStatement.step() {
+            found = true
+        }
+        
+        try findStatement.finalize()
+        
+        return found
+    }
+    
+    func findModelObjectOfType<U: ModelObject>(_ type:U.Type, primaryKeyValue: Any) throws -> U? {
+        guard let db = databaseConnection else {
+            return nil
+        }
+        
+        let entity = U.entity
+        
+        guard let findSQL = entity.findByPrimaryKeySQL else {
+            return nil
+        }
+        
+        guard let findStatement = try db.prepareStatement(withSQLString: findSQL) else {
+            return nil
+        }
+        
+        try findStatement.bind(item: primaryKeyValue, atIndex: 1)
+        
+        let foundObject = try nextModelObjectOfType(type, fromStatement: findStatement)
+        
+        try findStatement.finalize()
+        
+        return foundObject
+    }
+    
+    func nextModelObjectOfType<U: ModelObject>(_ type:U.Type, fromStatement statement: DatabaseConnection.Statement) throws -> U? {
+        guard try statement.step() else {
+            return nil
+        }
         
         let entity = U.entity
         guard let modelObject = entity.create() else {
             return nil
         }
         
-        // How to get property for column (preferably by index, which means entity needs to keep order)
-        // How to coerce raw DB value to instance value
+        // TODO: How to get property for column (preferably by index, which means entity needs to keep order)
         
         let columnCount = Int(statement.columnCount)
         
@@ -269,7 +369,7 @@ class Entity {
             return nil
         }
         
-        return "SELECT \(columnsListString) FROM \(tableName) WHERE = \(pkp.columnName)"
+        return "SELECT \(columnsListString) FROM \(tableName) WHERE \(pkp.columnName) = ?"
     }
     
     var findByRowIDSQL: String? {
@@ -308,11 +408,11 @@ class Entity {
         for (index, currentItem) in properties.enumerated() {
             let currentProperty = currentItem.value
             
-            columnsString.append(currentProperty.columnName)
-            
             if index > 0 {
                 columnsString.append(", ")
             }
+            
+            columnsString.append(currentProperty.columnName)
         }
         
         return columnsString
@@ -373,7 +473,7 @@ class Entity {
         return "INSERT INTO \(tableName) (\(columnsString)) VALUES (\(valuesString))"
     }
     
-    func updateSQLForPropertyKeys(_ keys: Array<String>, primaryKeyValue: AnyObject) -> String? {
+    func updateSQLForKeys(_ keys: Array<String>) -> String? {
         guard properties.count > 0, let primaryKeyColumn = primaryKeyProperty?.columnName else {
             return nil
         }
@@ -595,8 +695,12 @@ class DatabaseConnection {
                 return
             }
             
-            if let integerItem = value as? Int64 {
-                sqlite3_bind_int64(statement, index, integerItem)
+            if let intItem = value as? Int {
+                sqlite3_bind_int(statement, index, Int32(intItem))
+            } else if let integerItem = value as? Int32 {
+                sqlite3_bind_int(statement, index, integerItem)
+            } else if let longItem = value as? Int64 {
+                sqlite3_bind_int64(statement, index, longItem)
             } else if let floatItem = value as? Double {
                 sqlite3_bind_double(statement, index, floatItem)
             } else if let stringItem = value as? String {
@@ -608,12 +712,15 @@ class DatabaseConnection {
             }
         }
         
-        func step () throws {
+        @discardableResult func step () throws -> Bool {
             let err = sqlite3_step(statement)
-            if err == SQLITE_ROW || err == SQLITE_DONE {
-                return
+            if err == SQLITE_ROW {
+                return true
+            } else if err == SQLITE_DONE {
+                return false
             }
             
+            // TODO: Should only throw an exception here in case of a definite error
             throw SQLiteError.Step
         }
         
