@@ -44,70 +44,9 @@ enum SQLiteType: String {
 
 protocol ModelObject {
     static var entity: Entity { get }
+    
+    func setKey<T>(_ key: String, value: T)
 }
-
-/*protocol Setter {
- associatedtype ValueType
- 
- func setValue(_: ValueType, forKey: String, onModelObject: ModelObject)
- }
- 
- 
- struct TextSetter: Setter {
- typealias ValueType = String
- 
- let setter: (String, String, ModelObject) -> Void
- 
- func setValue(_ value: String, forKey key: String, onModelObject modelObject: ModelObject) {
- setter(value, key, modelObject)
- }
- }
- 
- 
- struct IntSetter: Setter {
- typealias ValueType = Int
- 
- let setter: (Int, String, ModelObject) -> Void
- 
- func setValue(_ value: Int, forKey key: String, onModelObject modelObject: ModelObject) {
- setter(value, key, modelObject)
- }
- }
- 
- 
- class AnySetterBoxBase<T>: Setter {
- typealias ValueType = T
- 
- func setValue(_: T, forKey: String, onModelObject: ModelObject) {
- fatalError()
- }
- }
- 
- 
- final class AnySetterBox<Base: Setter>: AnySetterBoxBase<Base.ValueType> {
- var base: Base
- 
- init(_ base: Base) {
- self.base = base
- }
- 
- override func setValue(_ value: Base.ValueType, forKey key: String, onModelObject modelObject: ModelObject) {
- base.setValue(value, forKey: key, onModelObject: modelObject)
- }
- }
- 
- 
- struct AnySetter<T>: Setter {
- var box: AnySetterBoxBase<T>
- 
- func setValue(_ value: T, forKey key: String, onModelObject modelObject: ModelObject) {
- box.setValue(value, forKey: key, onModelObject: modelObject)
- }
- 
- init<U: Setter>(_ base: U) where U.ValueType == T {
- self.box = AnySetterBox(base)
- }
- }*/
 
 
 class TestModelObject: ModelObject {
@@ -118,31 +57,24 @@ class TestModelObject: ModelObject {
     static let entity: Entity = {
         let entity = Entity(name: "TestObject", tableName: "test_object", modelInstanceCreator: TestModelObject.init)
         
-        
         entity.addProperty(Property(withKey: "identifier", columnName: "id", type: .Integer))
-        
         entity.addProperty(Property(withKey: "name", columnName: "name", type: .Text))
-        
         entity.addProperty(Property(withKey: "city", columnName: "city", type: .Text))
         
         return entity
     }()
     
-    func setProperty(_ setter: Setter) {
-        switch setter {
-        case .identifier(let identifier):
-            self.identifier = identifier
-        case .name(let name):
-            self.name = name
-        case .city(let city):
-            self.city = city
+    func setKey<T>(_ key: String, value: T) {
+        switch key {
+        case "identifier":
+            self.identifier = value as? Int
+        case "name":
+            self.name = value as? String
+        case "city":
+            self.city = value as? String
+        default:
+            return
         }
-    }
-    
-    enum Setter {
-        case identifier(Int)
-        case name(String)
-        case city(String)
     }
 }
 
@@ -262,20 +194,21 @@ class DatabaseContext {
                 continue
             }
             
-            
-            
             let columnType = statement.columnType(forIndex: int32Index)
             
             switch columnType {
             case .Integer:
                 let intValue = statement.readInteger(atColumnIndex: int32Index)
-                
+                modelObject.setKey(property.key, value: intValue)
             case .Float:
                 let floatValue = statement.readFloat(atColumnIndex: int32Index)
+                modelObject.setKey(property.key, value: floatValue)
             case .Text:
                 let textValue = statement.readText(atColumnIndex: int32Index)
+                modelObject.setKey(property.key, value: textValue)
             case .Blob:
                 let blobValue = statement.readBlob(atColumnIndex: int32Index)
+                modelObject.setKey(property.key, value: blobValue)
             default:
                 continue
             }
@@ -737,4 +670,3 @@ func errorString(forCode err: Int32) -> String? {
     
     return nil
 }
-
