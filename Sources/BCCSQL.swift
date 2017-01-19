@@ -18,7 +18,7 @@ let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 typealias SQLiteRawType = Int32
 typealias KeyValuePair = (key: String, value: Any?)
-typealias AnyEntity = Entity<Any>
+
 
 enum SQLiteError: Error {
     case Open(errorString: String)
@@ -31,6 +31,7 @@ enum SQLiteError: Error {
     case Unknown
 }
 
+
 enum SQLiteType: String {
     case Integer = "INTEGER"
     case Float = "FLOAT"
@@ -42,28 +43,106 @@ enum SQLiteType: String {
 
 
 protocol ModelObject {
-    associatedtype InstanceType
-    static var entity: Entity<InstanceType> { get }
+    static var entity: Entity { get }
 }
+
+/*protocol Setter {
+ associatedtype ValueType
+ 
+ func setValue(_: ValueType, forKey: String, onModelObject: ModelObject)
+ }
+ 
+ 
+ struct TextSetter: Setter {
+ typealias ValueType = String
+ 
+ let setter: (String, String, ModelObject) -> Void
+ 
+ func setValue(_ value: String, forKey key: String, onModelObject modelObject: ModelObject) {
+ setter(value, key, modelObject)
+ }
+ }
+ 
+ 
+ struct IntSetter: Setter {
+ typealias ValueType = Int
+ 
+ let setter: (Int, String, ModelObject) -> Void
+ 
+ func setValue(_ value: Int, forKey key: String, onModelObject modelObject: ModelObject) {
+ setter(value, key, modelObject)
+ }
+ }
+ 
+ 
+ class AnySetterBoxBase<T>: Setter {
+ typealias ValueType = T
+ 
+ func setValue(_: T, forKey: String, onModelObject: ModelObject) {
+ fatalError()
+ }
+ }
+ 
+ 
+ final class AnySetterBox<Base: Setter>: AnySetterBoxBase<Base.ValueType> {
+ var base: Base
+ 
+ init(_ base: Base) {
+ self.base = base
+ }
+ 
+ override func setValue(_ value: Base.ValueType, forKey key: String, onModelObject modelObject: ModelObject) {
+ base.setValue(value, forKey: key, onModelObject: modelObject)
+ }
+ }
+ 
+ 
+ struct AnySetter<T>: Setter {
+ var box: AnySetterBoxBase<T>
+ 
+ func setValue(_ value: T, forKey key: String, onModelObject modelObject: ModelObject) {
+ box.setValue(value, forKey: key, onModelObject: modelObject)
+ }
+ 
+ init<U: Setter>(_ base: U) where U.ValueType == T {
+ self.box = AnySetterBox(base)
+ }
+ }*/
+
 
 class TestModelObject: ModelObject {
     var identifier: Int?
     var name: String?
     var city: String?
     
-    static var entity: Entity<TestModelObject> {
-        get {
-            let entity = Entity<TestModelObject>(name: "TestObject", tableName: "test_object", modelInstanceCreator: TestModelObject.init)
-            entity.addProperty(Property<TestModelObject>(withKey: "identifier", columnName: "id", type: .Integer))
-            entity.addProperty(Property<TestModelObject>(withKey: "name", columnName: "name", type: .Text))
-            entity.addProperty(Property<TestModelObject>(withKey: "city", columnName: "city", type: .Text))
-            
-            return entity
+    static let entity: Entity = {
+        let entity = Entity(name: "TestObject", tableName: "test_object", modelInstanceCreator: TestModelObject.init)
+        
+        
+        entity.addProperty(Property(withKey: "identifier", columnName: "id", type: .Integer))
+        
+        entity.addProperty(Property(withKey: "name", columnName: "name", type: .Text))
+        
+        entity.addProperty(Property(withKey: "city", columnName: "city", type: .Text))
+        
+        return entity
+    }()
+    
+    func setProperty(_ setter: Setter) {
+        switch setter {
+        case .identifier(let identifier):
+            self.identifier = identifier
+        case .name(let name):
+            self.name = name
+        case .city(let city):
+            self.city = city
         }
     }
     
-    init() {
-        
+    enum Setter {
+        case identifier(Int)
+        case name(String)
+        case city(String)
     }
 }
 
@@ -74,7 +153,7 @@ class DatabaseContext {
     private var databaseConnection: DatabaseConnection?
     private let queue: DispatchQueue
     
-    private var entities = [String: AnyEntity]()
+    private var entities = [String: Entity]()
     
     init (databasePath dbPath: String) {
         databasePath = dbPath
@@ -118,15 +197,15 @@ class DatabaseContext {
         }
     }
     
-    func addEntity(_ entity: AnyEntity) {
+    func addEntity(_ entity: Entity) {
         entities[entity.name] = entity
     }
     
-    func entityForName(_ name: String) -> AnyEntity? {
+    func entityForName(_ name: String) -> Entity? {
         return entities[name]
     }
     
-    func createModelObjectOfType<U: ModelObject>(_ type: U.Type, withKeysAndValues keyValueList: KeyValuePair...) throws -> U.InstanceType? {
+    func createModelObject<U: ModelObject>(withKeysAndValues keyValueList: KeyValuePair...) throws -> U? {
         guard let db = databaseConnection else {
             return nil
         }
@@ -151,20 +230,20 @@ class DatabaseContext {
             try insertStatement.finalize()
         }
         
-        guard let modelObject = entity.createModelObjectInstance() else {
-            return nil
-        }
+        let modelObject = entity.create()
         
         // Find object from database and return that
         
-        return modelObject
+        return modelObject as? U
     }
     
-    func nextModelObject<U: ModelObject>(fromStatement statement: DatabaseConnection.Statement) throws -> U.InstanceType? {
+    func nextModelObject<U: ModelObject>(fromStatement statement: DatabaseConnection.Statement) throws -> U? {
         try statement.step()
         
         let entity = U.entity
-        let modelObject = entity.createModelObjectInstance()
+        guard let modelObject = entity.create() else {
+            return nil
+        }
         
         // How to get property for column (preferably by index, which means entity needs to keep order)
         // How to coerce raw DB value to instance value
@@ -173,37 +252,48 @@ class DatabaseContext {
         let columnCount = Int(statement.columnCount)
         
         for index in 0...columnCount {
-            let columnType = statement.columnType(forIndex: Int32(index))
+            let int32Index = Int32(index)
             
-            /*switch columnType {
-             case .Integer:
-             
-             case .Float:
-             
-             case .Text:
-             
-             case .Blob
-             
-             default:
-             
-             }*/
+            guard let columnName = statement.columnName(forIndex: int32Index) else {
+                continue
+            }
+            
+            guard let property = entity.propertyForColumnName(columnName) else {
+                continue
+            }
+            
+            
+            
+            let columnType = statement.columnType(forIndex: int32Index)
+            
+            switch columnType {
+            case .Integer:
+                let intValue = statement.readInteger(atColumnIndex: int32Index)
+                
+            case .Float:
+                let floatValue = statement.readFloat(atColumnIndex: int32Index)
+            case .Text:
+                let textValue = statement.readText(atColumnIndex: int32Index)
+            case .Blob:
+                let blobValue = statement.readBlob(atColumnIndex: int32Index)
+            default:
+                continue
+            }
         }
         
-        return modelObject
+        return modelObject as? U
     }
 }
 
 
-class Entity<ModelObjectType> {
+class Entity {
     let name: String
     let tableName: String
     
-    typealias PropertyType = Property<ModelObjectType>
-    
-    private var properties = [String: PropertyType]()
+    private var properties = [String: Property]()
     var primaryKeyPropertyKey: String? = nil
     
-    let modelInstanceCreator: () -> ModelObjectType
+    let create: () -> ModelObject?
     
     var schemaSQL: String? {
         get {
@@ -268,7 +358,7 @@ class Entity<ModelObjectType> {
         }
     }
     
-    var primaryKeyProperty: PropertyType? {
+    var primaryKeyProperty: Property? {
         guard let primaryKey = self.primaryKeyPropertyKey else {
             return nil
         }
@@ -296,23 +386,19 @@ class Entity<ModelObjectType> {
         return columnsString
     }
     
-    subscript(key: String) -> PropertyType? {
+    subscript(key: String) -> Property? {
         get {
             return propertyForKey(key)
         }
     }
     
-    init (name: String, tableName: String, modelInstanceCreator: @escaping () -> ModelObjectType) {
+    required init<ModelObjectType: ModelObject> (name: String, tableName: String, modelInstanceCreator: @escaping () -> ModelObjectType?) {
         self.name = name
         self.tableName = tableName
-        self.modelInstanceCreator = modelInstanceCreator
+        self.create = modelInstanceCreator
     }
     
-    func createModelObjectInstance() -> ModelObjectType? {
-        return modelInstanceCreator()
-    }
-    
-    func addProperty(_ property: PropertyType, isPrimaryKey: Bool = false) {
+    func addProperty(_ property: Property, isPrimaryKey: Bool = false) {
         properties[property.key] = property
         
         if isPrimaryKey {
@@ -320,11 +406,11 @@ class Entity<ModelObjectType> {
         }
     }
     
-    func propertyForKey(_ key: String) -> PropertyType? {
+    func propertyForKey(_ key: String) -> Property? {
         return properties[key]
     }
     
-    func propertyForColumnName(_ columnName: String) -> PropertyType? {
+    func propertyForColumnName(_ columnName: String) -> Property? {
         return properties.filter ({ (columnName, currentProperty) -> Bool in
             return (currentProperty.columnName == columnName)
         }).first?.value
@@ -379,7 +465,7 @@ class Entity<ModelObjectType> {
 }
 
 
-struct Property<ModelObjectType> {
+struct Property {
     let key: String
     let columnName: String
     let sqlType: SQLiteType
@@ -413,6 +499,7 @@ struct Property<ModelObjectType> {
         self.columnName = columnName
         self.sqlType = type
     }
+    
 }
 
 
@@ -497,6 +584,18 @@ class DatabaseConnection {
         }
     }
     
+    class Blob {
+        
+        init(pointer: UnsafeRawPointer, length: Int) {
+            
+        }
+        
+        deinit {
+            
+        }
+        
+    }
+    
     struct Statement {
         var name: String?
         let SQLString: String
@@ -522,6 +621,34 @@ class DatabaseConnection {
         func columnType(forIndex index: Int32) -> SQLiteType {
             let sqliteRawType = sqlite3_column_type(statement, index)
             return columnTypeForSQLiteRawType(sqliteRawType)
+        }
+        
+        func readInteger(atColumnIndex columnIndex: Int32) -> Int {
+            let intValue = sqlite3_column_int(statement, columnIndex)
+            return Int(intValue)
+        }
+        
+        func readFloat(atColumnIndex columnIndex: Int32) -> Double {
+            let doubleValue = sqlite3_column_double(statement, columnIndex)
+            return Double(doubleValue)
+        }
+        
+        func readText(atColumnIndex columnIndex: Int32) -> String? {
+            guard let textValue = sqlite3_column_text(statement, columnIndex) else {
+                return nil
+            }
+            
+            return String.decodeCString(textValue, as: UTF8.self)?.result
+        }
+        
+        func readBlob(atColumnIndex columnIndex: Int32) -> Blob? {
+            guard let blobValue = sqlite3_column_blob(statement, columnIndex) else {
+                return nil
+            }
+            
+            let byteLength = sqlite3_column_bytes(statement, columnIndex)
+            
+            return Blob(pointer: blobValue, length: Int(byteLength))
         }
         
         func bind(values: Array<Any?>) throws {
