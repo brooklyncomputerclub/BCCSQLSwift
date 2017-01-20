@@ -6,6 +6,21 @@
 //
 //
 
+// TODO: Explicit column ordering
+// TODO: Relationships/foreign keys support
+// TODO: Sort descriptors
+// TODO: NSPredicate clone?
+// TODO: Transaction bundling/first class transaction objects
+// TODO: Mass object import
+// TODO: GCD support
+// TODO: Prepared Statement caching
+// TODO: BLOB Support
+// TODO: In-memory object cache
+// TODO: Observation?
+// TODO: Versioning/handle DB incompatibility?
+// TODO: Investigate memory management of OpaquePointers
+// TODO: Handle property value conflicts/merging
+
 #if os(Linux)
     import CSQLiteLinux
 #else
@@ -63,6 +78,8 @@ class DatabaseContext {
         
         queue = DispatchQueue(label: "nyc.bcc.SQLContext.WorkerQueue")
         //queue.setTarget(queue: DispatchQueue.global())
+        
+        initializeDatabase()
     }
     
     func initializeDatabase () {
@@ -77,34 +94,24 @@ class DatabaseContext {
         } catch {
             print("Unknown error")
         }
-        
-        createEntityTables()
     }
     
-    func createEntityTables () {
-        guard let dbConnection = databaseConnection else {
+    func initializeForModelObjectsOfType<U: ModelObject>(_ type: U.Type) {
+        guard let db = databaseConnection else {
             return
         }
         
-        for (_, currentEntity) in entities {
-            do {
-                guard let createSQL = currentEntity.schemaSQL else {
-                    return
-                }
-                
-                try dbConnection.exec(withSQLString: createSQL)
-            } catch {
-                print("Error creating entity tables:")
+        let entity = U.entity
+        
+        do {
+            guard let createSQL = entity.schemaSQL else {
+                return
             }
+            
+            try db.exec(withSQLString: createSQL)
+        } catch {
+            print("Error creating entity table:")
         }
-    }
-    
-    func addEntity(_ entity: Entity) {
-        entities[entity.name] = entity
-    }
-    
-    func entityForName(_ name: String) -> Entity? {
-        return entities[name]
     }
     
     func createModelObjectOfType<U: ModelObject>(_ type:U.Type, withKeysAndValues keyValueList: KeyValuePair...) throws -> U? {
@@ -325,6 +332,8 @@ class Entity {
     private var properties = [String: Property]()
     var primaryKeyPropertyKey: String? = nil
     
+    private var relationships: [Relationship] = Array<Relationship>()
+    
     let create: () -> ModelObject?
     
     var schemaSQL: String? {
@@ -368,6 +377,10 @@ class Entity {
         guard let pkp = primaryKeyProperty else {
             return nil
         }
+        
+        /*for currentRelationship in relationships {
+         let joinSQL = "LEFT JOIN X ON \(tableName).\(currentRelationship.propertyKey) == X"
+         }*/
         
         return "SELECT \(columnsListString) FROM \(tableName) WHERE \(pkp.columnName) = ?"
     }
@@ -448,6 +461,22 @@ class Entity {
         }).first?.value
     }
     
+    func addRelationshipToModelObjectOfType<U: ModelObject>(_ type: U.Type, propertyKey: String, foreignKey: String? = nil) {
+        let foreignEntity = U.entity
+        
+        var key = foreignKey
+        
+        if key == nil {
+            key = foreignEntity.primaryKeyPropertyKey
+        }
+        
+        guard key != nil else {
+            return
+        }
+        
+        relationships.append(Relationship(entityName: foreignEntity.name, propertyKey: key!))
+    }
+    
     func insertSQLForPropertyKeys(_ keys: Array<String>) -> String? {
         guard properties.count > 0 else {
             return nil
@@ -497,7 +526,7 @@ class Entity {
 }
 
 
-struct Property {
+class Property {
     let key: String
     let columnName: String
     let sqlType: SQLiteType
@@ -531,7 +560,6 @@ struct Property {
         self.columnName = columnName
         self.sqlType = type
     }
-    
 }
 
 
@@ -729,6 +757,12 @@ class DatabaseConnection {
         }
     }
 }
+
+struct Relationship {
+    let entityName: String
+    let propertyKey: String
+}
+
 
 func columnTypeForSQLiteRawType(_ sqliteType: SQLiteRawType) -> SQLiteType {
     switch sqliteType {
