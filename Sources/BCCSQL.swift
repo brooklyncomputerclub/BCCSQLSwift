@@ -230,7 +230,7 @@ class DatabaseContext {
         
         let entity = U.entity
         
-        guard let findSQL = entity.findByPrimaryKeySQL else {
+        guard let findSQL = entity.findByPrimaryKeySQL(includingRelationships: true) else {
             return false
         }
         
@@ -258,7 +258,7 @@ class DatabaseContext {
         
         let entity = U.entity
         
-        guard let findSQL = entity.findByPrimaryKeySQL else {
+        guard let findSQL = entity.findByPrimaryKeySQL() else {
             return nil
         }
         
@@ -363,6 +363,8 @@ class Entity {
                 }
             }
             
+            // TODO: Create columns for relationships too
+            
             sqlString.append(")")
             
             return sqlString
@@ -371,18 +373,6 @@ class Entity {
     
     var selectSQL: String? {
         return "SELECT \(columnsListString) FROM \(tableName)"
-    }
-    
-    var findByPrimaryKeySQL: String? {
-        guard let pkp = primaryKeyProperty else {
-            return nil
-        }
-        
-        /*for currentRelationship in relationships {
-         let joinSQL = "LEFT JOIN X ON \(tableName).\(currentRelationship.propertyKey) == X"
-         }*/
-        
-        return "SELECT \(columnsListString) FROM \(tableName) WHERE \(pkp.columnName) = ?"
     }
     
     var findByRowIDSQL: String? {
@@ -461,20 +451,8 @@ class Entity {
         }).first?.value
     }
     
-    func addRelationshipToModelObjectOfType<U: ModelObject>(_ type: U.Type, propertyKey: String, foreignKey: String? = nil) {
-        let foreignEntity = U.entity
-        
-        var key = foreignKey
-        
-        if key == nil {
-            key = foreignEntity.primaryKeyPropertyKey
-        }
-        
-        guard key != nil else {
-            return
-        }
-        
-        relationships.append(Relationship(entityName: foreignEntity.name, propertyKey: key!))
+    func addRelationshipToModelObjectOfType<U: ModelObject>(_ type: U.Type, propertyKey: String, foreignPropertyKey: String? = nil) {
+        relationships.append(Relationship(propertyKey: propertyKey, foreignEntityType: U.self, foreignPropertyKey: foreignPropertyKey))
     }
     
     func insertSQLForPropertyKeys(_ keys: Array<String>) -> String? {
@@ -522,6 +500,42 @@ class Entity {
         }
         
         return "UPDATE \(tableName) SET \(assignmentsString) WHERE \(primaryKeyColumn) = ?"
+    }
+    
+    func findByPrimaryKeySQL(includingRelationships: Bool = true) -> String? {
+        guard let pkp = primaryKeyProperty else {
+            return nil
+        }
+        
+        let primaryKeyColumn = pkp.columnName
+        
+        var findSQL = "SELECT \(columnsListString) FROM \(tableName) WHERE \(primaryKeyColumn) = ?"
+        
+        if !includingRelationships && relationships.count > 0 {
+            return findSQL
+        }
+        
+        for currentRelationship in relationships {
+            let foreignEntity = currentRelationship.foreignEntityType.entity
+            let foreignTable = foreignEntity.tableName
+            
+            var foreignProperty: Property?
+            if let foreignPropertyKey = currentRelationship.foreignPropertyKey {
+                foreignProperty = foreignEntity.propertyForKey(foreignPropertyKey)
+            } else {
+                foreignProperty = foreignEntity.primaryKeyProperty
+            }
+            
+            guard let foreignColumnName = foreignProperty?.columnName else {
+                continue
+            }
+            
+            let joinSQL = " LEFT JOIN \(foreignTable) ON \(tableName).\(primaryKeyColumn) = \(foreignTable).\(foreignColumnName)"
+            
+            findSQL.append(joinSQL)
+        }
+        
+        return findSQL
     }
 }
 
@@ -759,8 +773,9 @@ class DatabaseConnection {
 }
 
 struct Relationship {
-    let entityName: String
     let propertyKey: String
+    let foreignEntityType: ModelObject.Type
+    let foreignPropertyKey: String?
 }
 
 
