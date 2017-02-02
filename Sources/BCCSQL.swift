@@ -6,7 +6,6 @@
 //
 //
 
-// TODO: Explicit column ordering
 // TODO: Relationships/foreign keys support
 // TODO: Sort descriptors
 // TODO: NSPredicate clone?
@@ -251,14 +250,14 @@ class DatabaseContext {
         return found
     }
     
-    func findModelObjectOfType<U: ModelObject>(_ type:U.Type, primaryKeyValue: Any) throws -> U? {
+    func findModelObjectOfType<U: ModelObject>(_ type:U.Type, primaryKeyValue: Any, includeRelationships: Bool = true) throws -> U? {
         guard let db = databaseConnection else {
             return nil
         }
         
         let entity = U.entity
         
-        guard let findSQL = entity.findByPrimaryKeySQL() else {
+        guard let findSQL = entity.findByPrimaryKeySQL(includingRelationships: includeRelationships) else {
             return nil
         }
         
@@ -275,7 +274,7 @@ class DatabaseContext {
         return foundObject
     }
     
-    func nextModelObjectOfType<U: ModelObject>(_ type:U.Type, fromStatement statement: DatabaseConnection.Statement) throws -> U? {
+    func nextModelObjectOfType<U: ModelObject>(_ type:U.Type, fromStatement statement: DatabaseConnection.Statement, includeRelationships: Bool = true) throws -> U? {
         guard try statement.step() else {
             return nil
         }
@@ -330,9 +329,8 @@ class Entity {
     let tableName: String
     
     private var properties = [String: Property]()
+    var propertyOrder = [String]()
     var primaryKeyPropertyKey: String? = nil
-    
-    private var relationships: [Relationship] = Array<Relationship>()
     
     let create: () -> ModelObject?
     
@@ -345,8 +343,10 @@ class Entity {
             
             sqlString.append(" (")
             
-            for (index, currentItem) in properties.enumerated() {
-                let currentProperty = currentItem.value
+            for (index, currentPropertyKey) in propertyOrder.enumerated() {
+                guard let currentProperty = properties[currentPropertyKey] else {
+                    continue
+                }
                 
                 guard let columnSQL = currentProperty.schemaSQL else {
                     continue
@@ -361,6 +361,7 @@ class Entity {
                 if index < (properties.count - 1) {
                     sqlString.append(", ")
                 }
+                
             }
             
             // TODO: Create columns for relationships too
@@ -408,8 +409,10 @@ class Entity {
         
         var columnsString = String()
         
-        for (index, currentItem) in properties.enumerated() {
-            let currentProperty = currentItem.value
+        for (index, currentPropertyKey) in propertyOrder.enumerated() {
+            guard let currentProperty = properties[currentPropertyKey] else {
+                continue
+            }
             
             if index > 0 {
                 columnsString.append(", ")
@@ -434,7 +437,15 @@ class Entity {
     }
     
     func addProperty(_ property: Property, isPrimaryKey: Bool = false) {
-        properties[property.key] = property
+        let key = property.key
+        
+        properties[key] = property
+        
+        if let existingIndex = propertyOrder.index(of: key) {
+            propertyOrder.remove(at: existingIndex)
+        }
+        
+        propertyOrder.append(key)
         
         if isPrimaryKey {
             self.primaryKeyPropertyKey = property.key
@@ -449,10 +460,6 @@ class Entity {
         return properties.filter ({ (columnName, currentProperty) -> Bool in
             return (currentProperty.columnName == columnName)
         }).first?.value
-    }
-    
-    func addRelationshipToModelObjectOfType<U: ModelObject>(_ type: U.Type, propertyKey: String, foreignPropertyKey: String? = nil) {
-        relationships.append(Relationship(propertyKey: propertyKey, foreignEntityType: U.self, foreignPropertyKey: foreignPropertyKey))
     }
     
     func insertSQLForPropertyKeys(_ keys: Array<String>) -> String? {
@@ -509,33 +516,7 @@ class Entity {
         
         let primaryKeyColumn = pkp.columnName
         
-        var findSQL = "SELECT \(columnsListString) FROM \(tableName) WHERE \(primaryKeyColumn) = ?"
-        
-        if !includingRelationships && relationships.count > 0 {
-            return findSQL
-        }
-        
-        for currentRelationship in relationships {
-            let foreignEntity = currentRelationship.foreignEntityType.entity
-            let foreignTable = foreignEntity.tableName
-            
-            var foreignProperty: Property?
-            if let foreignPropertyKey = currentRelationship.foreignPropertyKey {
-                foreignProperty = foreignEntity.propertyForKey(foreignPropertyKey)
-            } else {
-                foreignProperty = foreignEntity.primaryKeyProperty
-            }
-            
-            guard let foreignColumnName = foreignProperty?.columnName else {
-                continue
-            }
-            
-            let joinSQL = " LEFT JOIN \(foreignTable) ON \(tableName).\(primaryKeyColumn) = \(foreignTable).\(foreignColumnName)"
-            
-            findSQL.append(joinSQL)
-        }
-        
-        return findSQL
+        return "SELECT \(columnsListString) FROM \(tableName) WHERE \(primaryKeyColumn) = ?"
     }
 }
 
@@ -546,6 +527,7 @@ class Property {
     let sqlType: SQLiteType
     var nonNull: Bool = false
     var unique: Bool = false
+    var relationship: Relationship?
     
     var schemaSQL: String? {
         get {
@@ -773,7 +755,6 @@ class DatabaseConnection {
 }
 
 struct Relationship {
-    let propertyKey: String
     let foreignEntityType: ModelObject.Type
     let foreignPropertyKey: String?
 }
