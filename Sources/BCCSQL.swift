@@ -495,7 +495,7 @@ class Entity {
         }
         
         var propertiesSQL = String()
-        var joinSQL = String()
+        var joinSQL: String? = nil
         
         for (index, currentKey) in propertyOrder.enumerated() {
             guard let currentProperty = properties[currentKey] else {
@@ -532,7 +532,11 @@ class Entity {
                 let (foreignColumnList, foreignJoinString) = foreignEntity.columnList(includingRelationships: true)
                 
                 propertiesSQL.append(", \(foreignColumnList)")
-                joinSQL.append("LEFT JOIN \(foreignTableName) ON \(foreignTableName).\(foreignColumnName!) == \(tableName).\(currentColumnName)")
+                joinSQL = "LEFT JOIN \(foreignTableName) ON \(foreignTableName).\(foreignColumnName!) == \(tableName).\(currentColumnName)"
+                
+                if foreignJoinString != nil {
+                    joinSQL?.append(" \(foreignJoinString!)")
+                }
             }
         }
         
