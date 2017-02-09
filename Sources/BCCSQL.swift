@@ -373,11 +373,13 @@ class Entity {
     }
     
     var selectSQL: String? {
-        return "SELECT \(columnsListString) FROM \(tableName)"
+        let columnString = columnList(includingRelationships: false)
+        return "SELECT \(columnString) FROM \(tableName)"
     }
     
     var findByRowIDSQL: String? {
-        return "SELECT \(columnsListString) FROM \(tableName) WHERE rowid = ?"
+        let columnString = columnList(includingRelationships: false)
+        return "SELECT \(columnString) FROM \(tableName) WHERE rowid = ?"
     }
     
     var deleteSQL: String? {
@@ -400,28 +402,6 @@ class Entity {
         }
         
         return self[primaryKey]
-    }
-    
-    var columnsListString: String {
-        guard properties.count > 0 else {
-            return "*"
-        }
-        
-        var columnsString = String()
-        
-        for (index, currentPropertyKey) in propertyOrder.enumerated() {
-            guard let currentProperty = properties[currentPropertyKey] else {
-                continue
-            }
-            
-            if index > 0 {
-                columnsString.append(", ")
-            }
-            
-            columnsString.append(currentProperty.columnName)
-        }
-        
-        return columnsString
     }
     
     subscript(key: String) -> Property? {
@@ -509,6 +489,57 @@ class Entity {
         return "UPDATE \(tableName) SET \(assignmentsString) WHERE \(primaryKeyColumn) = ?"
     }
     
+    func columnList(includingRelationships: Bool = true) -> (columns: String, joinSQL: String?) {
+        guard properties.count > 0 else {
+            return ("*", nil)
+        }
+        
+        var propertiesSQL = String()
+        var joinSQL = String()
+        
+        for (index, currentKey) in propertyOrder.enumerated() {
+            guard let currentProperty = properties[currentKey] else {
+                continue
+            }
+            
+            let currentColumnName = currentProperty.columnName
+            
+            if index > 0 {
+                propertiesSQL.append(", ")
+            }
+            
+            propertiesSQL.append("\(tableName).\(currentColumnName)")
+            
+            if let currentRelationship = currentProperty.relationship {
+                let foreignEntity = currentRelationship.foreignEntityType.entity
+                let foreignTableName = foreignEntity.tableName
+                
+                if !includingRelationships {
+                    continue
+                }
+                
+                var foreignColumnName: String? = nil
+                if let fk = currentRelationship.foreignPropertyKey, let foreignProperty = foreignEntity[fk] {
+                    foreignColumnName = foreignProperty.columnName
+                } else if let fc = foreignEntity.primaryKeyProperty?.columnName {
+                    foreignColumnName = fc
+                }
+                
+                guard foreignColumnName != nil else {
+                    continue
+                }
+                
+                let (foreignColumnList, foreignJoinString) = foreignEntity.columnList(includingRelationships: true)
+                
+                propertiesSQL.append(", \(foreignColumnList)")
+                joinSQL.append("LEFT JOIN \(foreignTableName) ON \(foreignTableName).\(foreignColumnName!) == \(tableName).\(currentColumnName)")
+            }
+        }
+        
+        return (propertiesSQL, joinSQL)
+        
+    }
+    
     func findByPrimaryKeySQL(includingRelationships: Bool = true) -> String? {
         guard let pkp = primaryKeyProperty else {
             return nil
@@ -516,7 +547,17 @@ class Entity {
         
         let primaryKeyColumn = pkp.columnName
         
-        return "SELECT \(columnsListString) FROM \(tableName) WHERE \(primaryKeyColumn) = ?"
+        let (columnsString, joinString) = columnList(includingRelationships: true)
+        
+        var selectSQL = "SELECT \(columnsString) FROM \(tableName)"
+        
+        if let js = joinString {
+            selectSQL.append(" \(js)")
+        }
+        
+        selectSQL.append(" WHERE \(tableName).\(primaryKeyColumn) = ?")
+        
+        return selectSQL
     }
 }
 
